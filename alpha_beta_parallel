@@ -1,0 +1,84 @@
+import multiprocessing
+from multiprocessing import Pool, freeze_support
+import time
+
+import numpy as np
+
+num_cores = multiprocessing.cpu_count()
+usuable_cores=num_cores-4
+
+def search_3(self, depth, alpha, beta,moves):
+    self.postions += 1
+    if (depth == 0):
+        return self.evaluate(), None
+
+
+    if not moves:
+        if self.board.is_checkmate():
+            return -float('inf'), None
+        return 0, None
+
+    best_move = None
+    moves=moves
+
+    for move in moves:
+        self.board.push_uci(move)
+        evaluation, _ = self.search_2(depth - 1, -beta, -alpha)
+        evaluation = -evaluation
+        self.board.pop()
+
+        if evaluation >= beta:
+            best_move = best_move
+            return beta, best_move  # Beta cutoff
+        if evaluation > alpha:
+            alpha = evaluation
+            best_move = move
+
+    return alpha, best_move
+
+
+def in_parralel(self):
+    pool = multiprocessing.Pool(processes=usuable_cores)
+    start_time = time.time()
+    num_div_arr=usuable_cores
+    moves=self.order_moves
+    chunk_size =moves[:len(moves) // num_div_arr]
+
+    results = pool.starmap(search_3(),chunk_size)
+    total_count = results
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+
+
+#pool = multiprocessing.Pool(processes=num_cores)
+def count_range(start, end):
+    count = 0
+    for i in range(start, end):
+        count += (1+1)/2#5.159
+
+    return count
+def simple_bench():
+    count = 0
+    pool = multiprocessing.Pool(processes=num_cores)
+    start_time = time.time()
+    iterations=50000000#time about 25 sec
+    iterations1=1000000000#about 2.5 sec
+    chunk_size=iterations//8
+    start_values = [i * chunk_size + 1 for i in range(num_cores)]
+    end_values = [(i + 1) * chunk_size + 1 for i in range(num_cores)]
+
+    results = pool.starmap(count_range, zip(start_values, end_values))
+    total_count = results
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+
+    return elapsed_time, total_count
+
+
+if __name__ == "__main__":
+    freeze_support()
+    elapsed_time, total_count = simple_bench()
+    print(f"Elapsed Time: {elapsed_time} seconds")
+    print(f"Total Count: {total_count}")
