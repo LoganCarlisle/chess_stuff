@@ -1,0 +1,372 @@
+import chess
+import random
+import chess.pgn
+import chess.syzygy
+import numpy as np
+import math
+import time
+import multiprocessing
+from multiprocessing import Pool,freeze_support
+
+
+class Rep:
+    piece_values = {
+        chess.PAWN: 1,
+        chess.KNIGHT: 3,
+        chess.BISHOP: 3.3,
+        chess.ROOK: 5,
+        chess.QUEEN: 9,
+        chess.KING: 0,
+    }
+    def __init__(self):
+
+
+        self.board = chess.Board()
+        self.postions=0
+        self.move_history = []
+        self.chars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '1', '2', '3', '4', '6', '5', '7', '8']
+        self.stoi = {ch: i for i, ch in enumerate(self.chars)}
+        self.itos = {i: ch for i, ch in enumerate(self.chars)}
+        self.pawn=100
+        self.bishop=333
+        self.knight=300
+        self.queen=900
+        self.rook=5
+        self.best_move=None
+
+
+    def import_pos(self,str):
+        self.board=chess.Board(str)
+    def board_representaion(self):
+        chessboard_str=str(self.board)
+        piece_mapping = {
+            'p': -1,  # Black pawn
+            'r': -5,  # Black rook
+            'n': -3,  # Black knight
+            'b': -3.3,  # Black bishop
+            'q': -9,  # Black queen
+            'k': -10,  # Black king
+            'P': 1,  # White pawn
+            'R': 5,  # White rook
+            'N': 3,  # White knight
+            'B': 3.3,  # White bishop
+            'Q': 9,  # White queen
+            'K': 10,  # White king
+            '.': 0,  # Empty square
+        }
+        lines = chessboard_str.strip().split('\n')
+        chessboard_2d = [[piece_mapping[char] for char in line.split()] for line in lines]
+        if self.board.turn is False:
+            chessboard_2d = chessboard_2d[::-1]
+        return chessboard_2d
+
+
+    def getlegalmoves(self):
+        moves = list(self.board.legal_moves)
+        algebraic_moves = [f"{move.uci()[:2]}{move.uci()[2:]}" for move in moves]
+        return algebraic_moves
+    def test(self):
+        moves = list(self.board.legal_moves)
+        return moves
+
+
+
+    def status(self):
+        return self.board.is_checkmate() or self.board.is_stalemate()
+
+    def step(self):
+        if not self.status():
+            legal_moves = self.getlegalmoves()
+
+            random_move = random.choice(legal_moves)
+            self.board.push_uci(random_move)
+            self.move_history.append(random_move)
+    def unstep(self):
+        if self.move_history:
+            last_move = self.move_history.pop()
+            self.board.pop()
+
+    def mobility_augment(self):
+        white_pieces=0
+        black_pieces=0
+        piece_mobility=0
+        for square in chess.SQUARES:
+            piece = self.board.piece_at(square)
+            if piece is not None:
+                piece_color = "white" if piece.color == chess.WHITE else "black"
+                piece_type = piece.piece_type
+                piece_mobility += len(self.board.attacks(square))*.0001
+                piece_material=self.piece_values[piece_type]
+
+                if piece_color=='white':
+                    total_value = piece_material + piece_mobility
+                    white_pieces += total_value
+                elif piece_color=='black':
+                    total_value = piece_material + piece_mobility *-1
+                    black_pieces += total_value
+
+        return white_pieces-black_pieces
+
+    def is_opponent_king_only(self):
+        # Check if the opponent has only a king on the board
+        return (
+                self.board.occupied_co[chess.BLACK] == self.board.pieces(chess.KING, chess.BLACK)
+                and self.board.occupied_co[chess.WHITE] == self.board.pieces(chess.KING, chess.WHITE)
+        )
+
+    def easy_endgame(self):
+        evaluation = 0
+
+
+        # Find the opponent's king
+        enemy_king_square = self.board.king(not self.board.turn)
+
+        if enemy_king_square is not None:
+            if self.is_opponent_king_only():
+                # Check the proximity of the opponent's king to the edge
+                edge_bonus = 0
+                if chess.square_file(enemy_king_square) in (0, 7):
+                    edge_bonus += 10  # Opponent's king on the edge
+                if chess.square_rank(enemy_king_square) in (0, 7):
+                    edge_bonus += 10  # Opponent's king on the edge
+                # Check if the opponent's king is one rank or file away from the edge
+                if chess.square_file(enemy_king_square) in (1, 6):
+                    edge_bonus += 5  # Opponent's king one file away from the edge
+                if chess.square_rank(enemy_king_square) in (1, 6):
+                    edge_bonus += 5  # Opponent's king one rank away from the edge
+            else:
+                return evaluation
+
+            # Reward based on proximity to the edge
+            evaluation += edge_bonus
+
+        return evaluation
+
+
+
+
+    def material_balance(self):
+        white = self.board.occupied_co[chess.WHITE]
+        black = self.board.occupied_co[chess.BLACK]
+        return (
+                chess.popcount(white & self.board.pawns) - chess.popcount(black & self.board.pawns) +
+                3 * (chess.popcount(white & self.board.knights) - chess.popcount(black & self.board.knights)) +
+                3 * (chess.popcount(white & self.board.bishops) - chess.popcount(black & self.board.bishops)) +
+                5 * (chess.popcount(white & self.board.rooks) - chess.popcount(black & self.board.rooks)) +
+                9 * (chess.popcount(white & self.board.queens) - chess.popcount(black & self.board.queens))
+        )
+    def white_mat(self):
+        white=self.board.occupied_co[chess.WHITE]
+        return(chess.popcount(white & self.board.pawns)+(3 * (chess.popcount(white & self.board.knights))+(3 * (chess.popcount(white & self.board.bishops))+(5 * (chess.popcount(white & self.board.rooks))+(9 * (chess.popcount(white & self.board.queens)))))))
+
+
+    def black_mat(self):
+        black=self.board.occupied_co[chess.BLACK]
+        return(chess.popcount(black & self.board.pawns)+(3 * (chess.popcount(black & self.board.knights))+(3 * (chess.popcount(black & self.board.bishops))+(5 * (chess.popcount(black & self.board.rooks))+(9 * (chess.popcount(black & self.board.queens)))))))
+
+    def evaluate(self):
+        move_count=self.board.fullmove_number
+        if self.board.is_checkmate():
+            return float('inf')  # Checkmate is considered as maximum value
+
+        if self.board.is_stalemate():
+            return 0  # Stalemate is considered a draw
+        if move_count>30:
+            endgame=self.easy_endgame()
+        if move_count<=30:
+            endgame=0
+
+
+        perspective = 1 if self.board.turn == chess.WHITE else -1
+        #mat_eval = self.white_mat() - self.black_mat()
+        random_offset = np.random.uniform(-0.05, 0.05)
+        material_augment=self.mobility_augment()
+
+
+        return material_augment * perspective + random_offset+endgame
+
+
+
+    def order_moves(self):
+        moves=self.board.legal_moves
+        capture_moves = [move.uci() for move in moves if self.board.is_capture(move)or move.promotion is not None]
+        non_captures=[move.uci() for move in moves if not self.board.is_capture(move)]
+        return capture_moves+non_captures
+
+
+    def order(self):
+        moves=self.getlegalmoves()
+        move_scores = []
+        for move in moves:
+            move_score_guess=0
+            move_is=chess.Move.from_uci(move)
+            capture_square=move_is.to_square
+            victim_piece=self.board.piece_at(capture_square)
+            attacker_piece=self.board.piece_at(move_is.from_square)
+            if victim_piece is not None:
+                move_score_guess=10*self.piece_values[victim_piece.piece_type]-self.piece_values[attacker_piece.piece_type]
+
+            if self.board.attackers(not self.board.turn, capture_square) & self.board.pieces(chess.PAWN,not self.board.turn):
+                # Penalize the move if the destination square is attacked by an enemy pawn
+                move_score_guess -= 1
+            if move_is.promotion:
+                move_score_guess+=1
+            move_scores.append((move, move_score_guess))
+        sorted_moves = sorted(move_scores, key=lambda x: x[1], reverse=True)
+        sorted_moves = [move for move, _ in sorted_moves]
+        return sorted_moves
+
+    def encode(self, s):
+        return [self.stoi[c] for c in s]
+
+    def decode(self, l):
+        return ''.join([self.itos[i] for i in l])
+
+
+    def search_2(self,depth,alpha= -float('inf'),beta= float('inf')):
+        self.postions += 1
+        if(depth==0):
+            return self.evaluate(),None
+        moves=self.order()
+
+        if not moves:
+            if self.board.is_checkmate():
+                return -float('inf'),None
+            return 0,None
+
+        best_move=None
+
+        for move in moves:
+            self.board.push_uci(move)
+            evaluation,_=self.search_2(depth-1,-beta,-alpha)
+            evaluation = -evaluation
+            self.board.pop()
+
+            if evaluation >=beta:
+                return beta, best_move  # Beta cutoff
+            if evaluation > alpha:
+                alpha = evaluation
+                best_move = move
+
+        return alpha, best_move
+
+    def create_pgn(self,moves):
+        game = chess.pgn.Game()
+        game.headers["Event"] = "Example"
+        current_state= game  # Initialize the node as the main game
+
+        for move in moves:
+            current_state = current_state.add_variation(chess.Move.from_uci(move))
+            current_state.comment
+
+        return game
+
+    def action_num(self):
+        alg_moves = self.getlegalmoves()
+
+        for i in range(len(alg_moves)):
+            alg_moves[i] = self.encode(alg_moves[i])
+
+        return alg_moves
+
+
+    def has_castle(self):
+        black_q_cast=int(self.board.has_queenside_castling_rights(chess.BLACK))
+        black_k_cast=int(self.board.has_kingside_castling_rights(chess.BLACK))
+        white_q_cast=int(self.board.has_kingside_castling_rights(chess.WHITE))
+        white_k_cast=int(self.board.has_queenside_castling_rights(chess.WHITE))
+        return [black_q_cast, black_k_cast, white_q_cast, white_k_cast]
+
+    def search_3(self,depth,alpha,beta,chunk):
+        self.postions += 1
+        moves=chunk
+        best_move = None
+        if (depth == 0):
+            return self.evaluate(), None
+
+        if not moves:
+            if self.board.is_checkmate():
+                return -float('inf'), None
+            return 0, None
+
+        for move in moves:
+            self.board.push_uci(move)
+            evaluation, _ = self.search_2(depth - 1, -beta, -alpha)
+            evaluation = -evaluation
+            self.board.pop()
+
+            if evaluation >= beta:
+                return beta, best_move  # Beta cutoff
+            if evaluation > alpha:
+                alpha = evaluation
+                best_move = move
+
+        return alpha, best_move
+
+    def in_parralel(self,depth,alpha,beta):
+        usuable_cores=multiprocessing.cpu_count()
+        start_time = time.time()
+        moves = (self.order_moves())
+        move_groups = [moves[i:i + 2] for i in range(0, len(moves), 2)]
+        arguments = [(depth, alpha, beta, group) for group in move_groups]
+        with Pool(processes=usuable_cores) as pool:
+            results = pool.starmap(self.search_3, arguments)
+
+        pool.close()
+        pool.join()
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(elapsed_time)
+        print(move_groups)
+        print(results)
+        best_move = max(results, key=lambda x: x[0])
+        return best_move
+
+
+#rep.import_pos('rn1qkbnr/2pppppp/1p6/p2b2NQ/2B1P3/8/PPPP1PPP/RNB1K2R w KQkq - 4 6') #mate in two
+#rep.import_pos('rnbqkbn1/1ppppppr/7p/p7/4P3/1P4P1/PBPP1PBP/RN1QK1NR b KQq - 0 5')  #material diff
+
+
+
+if __name__ == '__main__':
+    rep = Rep()
+
+
+    alpha = -float('inf')  # Initialize alpha to negative infinity
+    beta = float('inf')
+
+    postistions = rep.postions
+    print(rep.mobility_augment())
+    print(rep.board)
+    board_states=[]
+    moved = []  # Initialize an empty list to store the moves
+    start_time = time.time()
+    val=0
+    while True:
+        if rep.board.is_checkmate() or rep.board.is_stalemate() or rep.board.is_insufficient_material():
+            break
+        val+=1
+        print('working')
+
+        best_move=rep.in_parralel(4,alpha,beta)#returns array of evalution+best move+ postitions looked at
+        if best_move[1] is None or best_move[0] == float('inf') or best_move[0] == float('-inf'):
+            print(rep.create_pgn(moved))
+            print(rep.postions)
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f"Elapsed time: {elapsed_time} seconds")
+            break
+
+        print(best_move)
+
+        moved.append(best_move[1])
+        rep.board.push_uci(best_move[1])
+        board_states.append((rep.board_representaion(),rep.has_castle()))
+
+    print(rep.create_pgn(moved))
+    print(rep.postions)
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Elapsed time: {elapsed_time} seconds")
+    print(board_states)
